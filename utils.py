@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
-import pandas as pd
+from functools import lru_cache
+import re
+
 import google_play_scraper
+import pandas as pd
+
+from scraping.google_play_scraper import expanded_search
 
 
 APP_COLUMNS = [
@@ -29,6 +34,65 @@ LABEL_MAP = {
     "NEUTRAL": "neutral",
     "POSITIVE": "positive",
 }
+REVIEW_TOPIC_KEYWORDS = {
+    "Pricing & subscriptions": (
+        "price",
+        "pricing",
+        "expensive",
+        "cost",
+        "subscription",
+        "premium",
+        "paywall",
+        "trial",
+        "refund",
+        "billing",
+        "charged",
+    ),
+    "Reliability": (
+        "crash",
+        "crashes",
+        "crashing",
+        "bug",
+        "bugs",
+        "broken",
+        "error",
+        "freeze",
+        "freezes",
+        "login",
+        "sync",
+    ),
+    "Usability": (
+        "interface",
+        "navigation",
+        "easy",
+        "difficult",
+        "confusing",
+        "design",
+        "user friendly",
+        "usability",
+    ),
+    "Content quality": (
+        "content",
+        "meditation",
+        "session",
+        "lesson",
+        "exercise",
+        "course",
+        "music",
+        "guided",
+        "guidance",
+        "library",
+    ),
+    "Ads": ("ad", "ads", "advert", "advertisement"),
+    "Customer support": (
+        "support",
+        "customer service",
+        "help desk",
+        "response",
+    ),
+    "Performance": ("slow", "fast", "lag", "laggy", "battery", "speed"),
+    "Privacy & data": ("privacy", "data", "permission", "tracking"),
+}
 
 
 def search_apps(
@@ -39,9 +103,9 @@ def search_apps(
 ) -> pd.DataFrame:
     """Search Google Play and return normalized app metadata."""
     try:
-        raw_apps = google_play_scraper.search(
+        raw_apps = expanded_search(
             query,
-            n_hits=n_results,
+            n_results=n_results,
             country=country,
             lang=lang,
         )
@@ -90,6 +154,19 @@ def get_app_reviews(
         return []
 
 
+@lru_cache(maxsize=2)
+def _get_sentiment_pipeline(model_name: str):
+    """Load each sentiment model once per Python process."""
+    from transformers import pipeline
+
+    return pipeline(
+        "sentiment-analysis",
+        model=model_name,
+        truncation=True,
+        max_length=512,
+    )
+
+
 def compute_sentiments(
     reviews: list[str],
     model_name: str = "cardiffnlp/twitter-roberta-base-sentiment-latest",
@@ -98,15 +175,7 @@ def compute_sentiments(
     if not reviews:
         return pd.DataFrame(columns=SENTIMENT_COLUMNS)
 
-    # Import lazily because importing transformers also initializes its ML stack.
-    from transformers import pipeline
-
-    sentiment_pipeline = pipeline(
-        "sentiment-analysis",
-        model=model_name,
-        truncation=True,
-        max_length=512,
-    )
+    sentiment_pipeline = _get_sentiment_pipeline(model_name)
     truncated_reviews = [review[:512] for review in reviews]
     predictions: list[dict[str, object]] = []
 
@@ -126,6 +195,77 @@ def compute_sentiments(
         )
 
     return pd.DataFrame(rows, columns=SENTIMENT_COLUMNS)
+
+
+def classify_review_topics(review: str) -> list[str]:
+    """Assign transparent product themes to one review."""
+    normalized_review = str(review).lower()
+    matched_topics = []
+
+    for topic, keywords in REVIEW_TOPIC_KEYWORDS.items():
+        if any(
+            re.search(rf"\b{re.escape(keyword)}\b", normalized_review)
+            for keyword in keywords
+        ):
+            matched_topics.append(topic)
+
+    return matched_topics or ["Other"]
+
+
+def summarize_review_topics(sentiments: pd.DataFrame) -> pd.DataFrame:
+    """Summarize topic mentions and sentiment percentages."""
+    columns = [
+        "topic",
+        "mentions",
+        "positive",
+        "neutral",
+        "negative",
+        "net_sentiment",
+    ]
+    if sentiments.empty:
+        return pd.DataFrame(columns=columns)
+
+    topic_rows = []
+    for row in sentiments.itertuples(index=False):
+        for topic in classify_review_topics(row.review):
+            topic_rows.append({"topic": topic, "label": row.label})
+
+    topic_data = pd.DataFrame(topic_rows)
+    counts = topic_data.groupby(["topic", "label"]).size().unstack(fill_value=0)
+    for label in ("positive", "neutral", "negative"):
+        if label not in counts:
+            counts[label] = 0
+
+    counts["mentions"] = counts[["positive", "neutral", "negative"]].sum(axis=1)
+    for label in ("positive", "neutral", "negative"):
+        counts[label] = counts[label] / counts["mentions"] * 100.0
+    counts["net_sentiment"] = counts["positive"] - counts["negative"]
+
+    return (
+        counts.reset_index()[columns]
+        .sort_values(["mentions", "topic"], ascending=[False, True])
+        .reset_index(drop=True)
+    )
+
+
+def parse_installs(value: object) -> int:
+    """Convert Google Play install labels such as 1M+ and 500K+ to ints."""
+    if pd.isna(value):
+        return 0
+
+    normalized = str(value).strip().upper().replace(",", "").replace("+", "")
+    match = re.search(r"(\d+(?:\.\d+)?)\s*([KMB]?)", normalized)
+    if not match:
+        return 0
+
+    number = float(match.group(1))
+    multiplier = {
+        "": 1,
+        "K": 1_000,
+        "M": 1_000_000,
+        "B": 1_000_000_000,
+    }[match.group(2)]
+    return int(number * multiplier)
 
 
 def get_app_sentiment_score(

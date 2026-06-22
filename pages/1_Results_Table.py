@@ -10,6 +10,11 @@ import utils
 
 st.set_page_config(page_title="Search Results", layout="wide")
 
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_search_apps(query: str, n_results: int) -> pd.DataFrame:
+    return utils.search_apps(query, n_results=n_results)
+
 st.title("Search Results")
 st.caption("Search Google Play and keep the result set available across pages.")
 
@@ -23,6 +28,7 @@ n_results = st.sidebar.slider(
     step=10,
 )
 search_clicked = st.sidebar.button("Search", type="primary", use_container_width=True)
+st.sidebar.caption("Search results are cached for 1 hour.")
 
 # A stored query without stored results can occur when another page initializes
 # the shared query first. Restore that state with one fetch, but otherwise reuse
@@ -39,7 +45,7 @@ if should_search:
         st.stop()
 
     with st.spinner("Fetching apps from Google Play..."):
-        results_df = utils.search_apps(normalized_query, n_results=n_results)
+        results_df = _cached_search_apps(normalized_query, n_results=n_results)
 
     st.session_state["results_df"] = results_df
     st.session_state["search_query"] = normalized_query

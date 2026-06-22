@@ -25,9 +25,10 @@ with features_column:
         """
         - Search apps by keyword
         - Browse results in a detailed table
+        - Compare a focused shortlist side by side
         - Explore interactive visualizations for ratings, genres, and free vs paid apps
         - Generate a word cloud from app descriptions
-        - Analyze sentiment in user reviews
+        - Analyze sentiment and recurring topics in user reviews
         """
     )
 
@@ -35,7 +36,7 @@ with roadmap_column:
     st.subheader("Roadmap / Improvements")
     st.markdown(
         """
-        - Compare saved competitor groups side by side
+        - Save named competitor watchlists
         - Track rating and review trends over time
         - Add richer filters and market-level comparisons
         - Export shareable competitor reports

@@ -1,11 +1,12 @@
 """Interactive visual analysis of the current Google Play result set."""
 
 import math
-import re
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+
+import utils
 
 
 st.set_page_config(page_title="Visualizations", layout="wide")
@@ -45,21 +46,6 @@ st.sidebar.metric("Apps in view", len(filtered_df))
 if filtered_df.empty:
     st.warning("No apps match the selected filters.")
     st.stop()
-
-
-def _parse_installs(value: object) -> int:
-    """Convert Google Play install labels such as 1M+ and 500K+ to ints."""
-    if pd.isna(value):
-        return 0
-
-    normalized = str(value).strip().upper().replace(",", "").replace("+", "")
-    match = re.search(r"(\d+(?:\.\d+)?)\s*([KM]?)", normalized)
-    if not match:
-        return 0
-
-    number = float(match.group(1))
-    multiplier = {"": 1, "K": 1_000, "M": 1_000_000}[match.group(2)]
-    return int(number * multiplier)
 
 
 ratings_tab, categories_tab, installs_tab, wordcloud_tab = st.tabs(
@@ -159,7 +145,7 @@ with categories_tab:
 
 with installs_tab:
     filtered_df["installs_numeric"] = filtered_df["installs"].map(
-        _parse_installs
+        utils.parse_installs
     )
     filtered_df["log10_installs"] = filtered_df["installs_numeric"].map(
         lambda installs: math.log10(installs) if installs > 0 else None
